@@ -1,0 +1,270 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// ==================== INSTANCIA WHATSAPP ====================
+
+model Instance {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  apiKey      String
+  baseUrl     String
+  phoneNumber String?
+  status      String   @default("DISCONNECTED") // DISCONNECTED, CONNECTING, CONNECTED, BANNED
+  qrCode      String?
+  lastSync    DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  groups    Group[]
+  campaigns Campaign[]
+  logs      Log[]
+}
+
+// ==================== GRUPOS ====================
+
+model Group {
+  id               String    @id @default(cuid())
+  instanceId       String
+  instance         Instance  @relation(fields: [instanceId], references: [id])
+
+  // Dados do WhatsApp
+  jid              String?   @unique
+  inviteCode       String?
+  inviteUrl        String?
+
+  // Metadados
+  name             String
+  description      String?
+  pictureUrl       String?
+  participantCount Int       @default(0)
+
+  // Origem
+  source           String    @default("MANUAL") // MANUAL, SCRAPED, IMPORTED, SYNCED
+  sourceUrl        String?
+  sourceKeyword    String?
+
+  // Status
+  status           String    @default("PENDING") // PENDING, JOINING, JOINED, LEFT, FAILED, BLOCKED
+  joinedAt         DateTime?
+  leftAt           DateTime?
+  lastMessageAt    DateTime?
+
+  // Controle
+  isActive         Boolean   @default(true)
+  isFavorite       Boolean   @default(false)
+  tags             String?
+  notes            String?
+
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  contacts        Contact[]
+  campaignGroups  CampaignGroup[]
+  messages        Message[]
+  logs            Log[]
+}
+
+// ==================== CONTATOS ====================
+
+model Contact {
+  id            String    @id @default(cuid())
+
+  // Dados do WhatsApp
+  phoneNumber   String    @unique
+  jid           String?
+  pushName      String?
+
+  // Metadados
+  name          String?
+  email         String?
+  notes         String?
+  tags          String?
+
+  // Origem
+  sourceGroupId String?
+  sourceGroup   Group?    @relation(fields: [sourceGroupId], references: [id])
+
+  // Status
+  isValid       Boolean   @default(true)
+  isBlocked     Boolean   @default(false)
+  lastMessageAt DateTime?
+  messageCount  Int       @default(0)
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  campaignContacts CampaignContact[]
+  messages         Message[]
+}
+
+// ==================== CAMPANHAS ====================
+
+model Campaign {
+  id          String   @id @default(cuid())
+  instanceId  String
+  instance    Instance @relation(fields: [instanceId], references: [id])
+
+  // Configuracao
+  name        String
+  description String?
+  type        String // GROUP_MESSAGE, CONTACT_MESSAGE, GROUP_JOIN
+
+  // Mensagem
+  messageText String?
+  mediaUrl    String?
+  mediaType   String? // IMAGE, VIDEO, AUDIO, DOCUMENT
+
+  // Rate Limiting
+  delayMin    Int      @default(30000)
+  delayMax    Int      @default(60000)
+  dailyLimit  Int      @default(200)
+  hourlyLimit Int      @default(30)
+
+  // Horario
+  scheduleStart String?
+  scheduleEnd   String?
+  scheduleDays  String?
+
+  // Status
+  status        String   @default("DRAFT") // DRAFT, SCHEDULED, RUNNING, PAUSED, COMPLETED, CANCELLED, FAILED
+  startedAt     DateTime?
+  pausedAt      DateTime?
+  completedAt   DateTime?
+
+  // Metricas
+  totalTargets   Int @default(0)
+  sentCount      Int @default(0)
+  deliveredCount Int @default(0)
+  failedCount    Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  groups   CampaignGroup[]
+  contacts CampaignContact[]
+  messages Message[]
+  logs     Log[]
+}
+
+model CampaignGroup {
+  id         String   @id @default(cuid())
+  campaignId String
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  groupId    String
+  group      Group    @relation(fields: [groupId], references: [id])
+
+  status    String    @default("PENDING") // PENDING, QUEUED, SENDING, SENT, DELIVERED, FAILED
+  sentAt    DateTime?
+  error     String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([campaignId, groupId])
+}
+
+model CampaignContact {
+  id         String   @id @default(cuid())
+  campaignId String
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contactId  String
+  contact    Contact  @relation(fields: [contactId], references: [id])
+
+  status    String    @default("PENDING")
+  sentAt    DateTime?
+  error     String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([campaignId, contactId])
+}
+
+// ==================== MENSAGENS ====================
+
+model Message {
+  id         String   @id @default(cuid())
+
+  // Relacoes
+  campaignId String?
+  campaign   Campaign? @relation(fields: [campaignId], references: [id])
+  groupId    String?
+  group      Group?    @relation(fields: [groupId], references: [id])
+  contactId  String?
+  contact    Contact?  @relation(fields: [contactId], references: [id])
+
+  // Dados
+  messageId  String?
+  type       String // TEXT, IMAGE, VIDEO, AUDIO, DOCUMENT
+  content    String
+  mediaUrl   String?
+
+  // Status
+  status      String    @default("PENDING")
+  sentAt      DateTime?
+  deliveredAt DateTime?
+  readAt      DateTime?
+  error       String?
+
+  createdAt DateTime @default(now())
+}
+
+// ==================== FILA ====================
+
+model QueueItem {
+  id           String   @id @default(cuid())
+
+  action       String // JOIN_GROUP, SEND_GROUP_MESSAGE, SEND_CONTACT_MESSAGE, EXTRACT_CONTACTS
+  payload      String // JSON
+  priority     Int      @default(0)
+
+  status       String   @default("PENDING") // PENDING, PROCESSING, COMPLETED, FAILED, CANCELLED
+  attempts     Int      @default(0)
+  maxAttempts  Int      @default(3)
+  lastError    String?
+
+  scheduledFor DateTime @default(now())
+  startedAt    DateTime?
+  completedAt  DateTime?
+
+  createdAt    DateTime @default(now())
+
+  @@index([status, scheduledFor])
+}
+
+// ==================== LOGS ====================
+
+model Log {
+  id         String    @id @default(cuid())
+
+  instanceId String?
+  instance   Instance? @relation(fields: [instanceId], references: [id])
+  campaignId String?
+  campaign   Campaign? @relation(fields: [campaignId], references: [id])
+  groupId    String?
+  group      Group?    @relation(fields: [groupId], references: [id])
+
+  level      String // DEBUG, INFO, WARN, ERROR
+  action     String
+  message    String
+  details    String?
+
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([level])
+}
+
+// ==================== CONFIGURACOES ====================
+
+model Setting {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       String
+  description String?
+
+  updatedAt DateTime @updatedAt
+}
